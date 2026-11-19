@@ -1,0 +1,57 @@
+# ============================================================
+# announce_restart.sk
+#
+# Annonce dans le chat le redémarrage programmé du serveur
+# (celui déclenché par le workflow GitHub Minestrator-Restart),
+# avec un rappel 5 minutes avant.
+#
+# Pré-requis : addon SkBee (https://github.com/ShaneBeeStudios/SkBee)
+#   -> fournit l'effet "send http get request" utilisé ci-dessous.
+#   Si tu utilises un autre addon HTTP (skript-reflect, skRayFall...),
+#   remplace juste la partie "récupération du JSON" par l'équivalent
+#   de cet addon ; le reste de la logique ne change pas.
+#
+# Remplace l'URL ci-dessous par l'URL "raw" de TON dépôt GitHub.
+# ============================================================
+
+options:
+	schedule_url: "https://raw.githubusercontent.com/TON_USER/TON_REPO/main/restart_schedule.json"
+
+# --- variables persistantes (sauvegardées automatiquement par Skript) ---
+# {restart::next_epoch}   -> timestamp Unix (secondes) du prochain redémarrage connu
+# {restart::warned_5min}  -> true si le rappel "5 minutes" a déjà été annoncé pour ce créneau
+# {restart::fired}        -> true si l'annonce finale a déjà été faite pour ce créneau
+
+every 1 minute:
+	# 1. on récupère le planning depuis GitHub
+	send http get request to {@schedule_url}:
+		set {_json} to the text response
+
+	if {_json} is set:
+		set {_epoch} to the integer in {_json} at "next_restart_epoch" # adapte selon ton addon de parsing JSON
+		set {_frozen} to the boolean in {_json} at "frozen"
+
+		if {_frozen} is true:
+			stop trigger # on est dans la plage 1h-6h, rien à annoncer
+
+		if {_epoch} is set:
+			if {restart::next_epoch} is not {_epoch}:
+				# nouveau créneau détecté -> on réinitialise les drapeaux d'annonce
+				set {restart::next_epoch} to {_epoch}
+				set {restart::warned_5min} to false
+				set {restart::fired} to false
+
+	# 2. calcul du temps restant par rapport au créneau mémorisé
+	if {restart::next_epoch} is set:
+		set {_now} to difference between date "01/01/1970 00:00:00" and now # astuce pour obtenir l'epoch actuel en secondes
+		set {_remaining} to {restart::next_epoch} - {_now}
+
+		# rappel à 5 minutes (entre 4min30 et 5min pour laisser une marge à la boucle "every 1 minute")
+		if {_remaining} <= 300 and {_remaining} > 0 and {restart::warned_5min} is not true:
+			broadcast "&e&l[Serveur] &eRedémarrage dans &c5 minutes&e. Pense à terminer ce que tu fais !"
+			set {restart::warned_5min} to true
+
+		# annonce finale au moment du redémarrage
+		if {_remaining} <= 0 and {restart::fired} is not true:
+			broadcast "&c&l[Serveur] &cRedémarrage en cours...&r &7(maintenance automatique)"
+			set {restart::fired} to true

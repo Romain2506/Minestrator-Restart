@@ -5,20 +5,46 @@ import uuid
 import urllib.request
 import urllib.parse
 import re
+from datetime import datetime, timezone
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:  # Python < 3.9, non utilisé ici mais sécurité
+    ZoneInfo = None
 from seleniumbase import SB
 
-_account = os.environ["MINESTRATOR_ACCOUNT"].split(",")
-EMAIL      = _account[0].strip()
-PASSWORD   = _account[1].strip()
+# ============================================================
+# Identifiants — lus depuis les secrets GitHub Actions
+# (dépôt public : plus aucun identifiant en clair dans le code)
+# ============================================================
+_account = os.environ.get("MINESTRATOR_ACCOUNT", "")
+EMAIL, _, PASSWORD = _account.partition(",")
+EMAIL = EMAIL.strip()
+PASSWORD = PASSWORD.strip()
 SERVER_ID  = os.environ.get("MINESTRATOR_SERVER_ID", "").strip()
 AUTH_TOKEN = os.environ.get("MINESTRATOR_AUTH", "").strip()
 
 _proxy = os.environ.get("GOST_PROXY", "").strip()
 LOCAL_PROXY = "127.0.0.1:8080" if _proxy else None
 
-_tg = os.environ.get("TG_BOT", "").strip()
-TG_CHAT_ID = _tg.split(",")[0].strip() if _tg else ""
-TG_TOKEN   = _tg.split(",")[1].strip() if _tg and "," in _tg else ""
+_tg = os.environ.get("TG_BOT", "")
+TG_CHAT_ID, _, TG_TOKEN = _tg.partition(",")
+TG_CHAT_ID = TG_CHAT_ID.strip()
+TG_TOKEN = TG_TOKEN.strip()
+
+DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
+
+# ============================================================
+# Plage de maintenance silencieuse : pas de redémarrage
+# entre 1h et 6h, heure de Paris (gère automatiquement l'heure d'été/hiver)
+# ============================================================
+FREEZE_START_HOUR = 1
+FREEZE_END_HOUR   = 6
+
+def is_in_freeze_window() -> bool:
+    if ZoneInfo is None:
+        return False
+    now_paris = datetime.now(ZoneInfo("Europe/Paris"))
+    return FREEZE_START_HOUR <= now_paris.hour < FREEZE_END_HOUR
 
 LOGIN_URL  = "https://minestrator.com/connexion"
 SERVER_URL = f"https://minestrator.com/my/server/{SERVER_ID}"
@@ -89,6 +115,64 @@ def send_tg(result, detail='', photo_path=None):
             print("📨 TG文本推送成功")
     except Exception as e:
         print(f"⚠️ TG推送失败：{e}")
+
+
+def send_discord(title: str, detail: str = ""):
+    """Envoie une notification dans un salon Discord via un webhook."""
+    if not DISCORD_WEBHOOK:
+        print("ℹ️ DISCORD_WEBHOOK non configuré, notification Discord ignorée")
+        return
+    content = f"**🎮 Minestrator — {title}**\n🕐 {now_str()}\n🖥 Serveur: {SERVER_ID}\n{detail}".strip()
+    payload = json.dumps({"content": content[:1900]}).encode("utf-8")
+    try:
+        req = urllib.request.Request(
+            DISCORD_WEBHOOK,
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=15):
+            print("📨 Webhook Discord envoyé")
+    except Exception as e:
+        print(f"⚠️ Échec webhook Discord : {e}")
+
+
+def parse_remaining_to_seconds(remaining: str) -> int:
+    """Convertit un texte type '3h 12m 40s' en secondes (0 si non reconnu)."""
+    if not remaining:
+        return 0
+    h = re.search(r'(\d+)\s*h', remaining)
+    m = re.search(r'(\d+)\s*m', remaining)
+    s = re.search(r'(\d+)\s*s', remaining)
+    total = 0
+    if h: total += int(h.group(1)) * 3600
+    if m: total += int(m.group(1)) * 60
+    if s: total += int(s.group(1))
+    return total
+
+
+def write_restart_schedule(remaining: str, frozen: bool):
+    """Écrit restart_schedule.json (lu par le script Skript côté serveur)."""
+    seconds = parse_remaining_to_seconds(remaining)
+    next_restart_iso = None
+    next_restart_epoch = None
+    if seconds > 0:
+        from datetime import timedelta
+        dt = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+        next_restart_iso = dt.strftime('%Y-%m-%dT%H:%M:%SZ')
+        next_restart_epoch = int(dt.timestamp())
+    data = {
+        "next_restart_utc": next_restart_iso,
+        "next_restart_epoch": next_restart_epoch,  # secondes Unix, plus simple à lire côté Skript
+        "updated_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+        "frozen": frozen,
+    }
+    try:
+        with open("restart_schedule.json", "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print(f"📝 restart_schedule.json écrit : {data}")
+    except Exception as e:
+        print(f"⚠️ Impossible d'écrire restart_schedule.json : {e}")
 
 
 # ============================================================
@@ -386,6 +470,18 @@ def click_login_btn(sb):
 # ============================================================
 
 def run_script():
+    if is_in_freeze_window():
+        msg = (
+            f"⏸️ Plage de maintenance {FREEZE_START_HOUR}h-{FREEZE_END_HOUR}h (Paris) en cours : "
+            "aucun redémarrage ne sera déclenché. Reprise automatique à "
+            f"{FREEZE_END_HOUR}h."
+        )
+        print(msg)
+        write_restart_schedule(remaining="", frozen=True)
+        send_tg("⏸️ Pause nocturne", msg)
+        send_discord("Pause nocturne (1h-6h)", msg)
+        return
+
     print("🔧 启动浏览器...")
 
     sb_kwargs = dict(uc=True, test=True)
@@ -528,6 +624,8 @@ def run_script():
         )
         print(f"⏱️ 执行完成：\n{summary}")
         send_tg("✅ 4小时重启/开机保活成功！", summary, photo_path="restart_success.png")
+        send_discord("Redémarrage réussi ✅", summary)
+        write_restart_schedule(remaining=remaining, frozen=False)
 
 
 if __name__ == "__main__":
