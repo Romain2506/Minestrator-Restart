@@ -5,17 +5,16 @@
 # déclenché par le workflow GitHub Minestrator-Restart), avec un
 # rappel 5 minutes avant.
 #
-# Pré-requis :
-#   - SkBee (déjà installé)
-#   - skJson (https://github.com/cooffeeRequired/skJson) : c'est CET
-#     addon qui fournit les requêtes HTTP ET le JSON, pas SkBee.
-#     SkBee seul ne peut pas faire de requête web.
+# Pré-requis : addon "Reqn" UNIQUEMENT (léger, juste pour l'HTTP) :
+#   https://github.com/btk5h/reqn/releases
+# Pas besoin de JSON : le fichier distant est au format texte tout
+# simple "frozen=0;seconds_remaining=8043", lu avec "split at" (natif Skript).
 #
 # Remplace l'URL ci-dessous si tu changes de dépôt/compte GitHub.
 # ============================================================
 
 options:
-	schedule_url: "https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.json"
+	schedule_url: "https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.txt"
 
 # Variables persistantes (sauvegardées automatiquement par Skript) :
 # {restart::countdown}   -> secondes restantes avant le prochain redémarrage (décompte chaque minute)
@@ -24,29 +23,29 @@ options:
 
 # --- 1. Toutes les 5 minutes : on va chercher l'info à jour sur GitHub ---
 every 5 minutes:
-	set {_req} to prepare GET request on {@schedule_url}
-	execute {_req}
-	set {_res} to last response of {_req}
+	send a request to {@schedule_url}
+	set {_resp} to the last http response
+	set {_code} to {_resp}'s status code
 
-	if {_res} is set:
-		if status code of {_res} is 200:
-			set {_json} to parse "%body of {_res}%" as json
-			set {_frozen} to value at path "frozen" in {_json}
+	if {_code} is 200:
+		set {_body} to {_resp}'s body
+		set {_frozen} to "0"
+		set {_seconds} to "0"
 
-			if {_frozen} is true or {_frozen} is "true":
-				# pause 1h-6h en cours : on coupe le compte à rebours, pas d'annonce
-				set {restart::countdown} to -1
-			else:
-				set {_seconds} to value at path "seconds_remaining" in {_json}
-				if {_seconds} is set:
-					# on resynchronise le compte à rebours sur la valeur officielle
-					set {restart::countdown} to {_seconds}
-					set {restart::warned_5min} to false
-					set {restart::fired} to false
+		set {_fields::*} to {_body} split at ";"
+		loop {_fields::*}:
+			set {_kv::*} to loop-value split at "="
+			if {_kv::1} is "frozen":
+				set {_frozen} to {_kv::2}
+			if {_kv::1} is "seconds_remaining":
+				set {_seconds} to {_kv::2}
+
+		if {_frozen} is "1":
+			set {restart::countdown} to -1
 		else:
-			loop all players:
-				if loop-player is op:
-					send "&7[Serveur] Impossible de lire le planning de redémarrage (code HTTP %status code of {_res}%)" to loop-player
+			set {restart::countdown} to {_seconds} parsed as number
+			set {restart::warned_5min} to false
+			set {restart::fired} to false
 
 # --- 2. Toutes les minutes : le compte à rebours descend et on annonce au bon moment ---
 every 1 minute:
@@ -67,19 +66,15 @@ every 1 minute:
 # --- 3. Commande pour un joueur/op : connaître le temps restant avant le prochain redémarrage ---
 command /prochainredemarrage:
 	permission: minestrator.restart.info
-	permission message: "&cTu n'as pas la permission d'utiliser cette commande."
 	aliases: /restarttime, /nextrestart
 	trigger:
 		if {restart::countdown} is not set:
 			send "&7Aucune information de redémarrage disponible pour le moment." to player
-			stop
+			stop trigger
 
 		if {restart::countdown} < 0:
 			send "&7Le serveur est en pause de maintenance (1h-6h), pas de redémarrage prévu pour l'instant." to player
-			stop
+			stop trigger
 
-		set {_h} to {restart::countdown} / 3600
-		set {_m} to ({restart::countdown} mod 3600) / 60
-		set {_s} to {restart::countdown} mod 60
-
-		send "&a[Serveur] &eProchain redémarrage dans &6%round({_h})%h %round({_m})%m %round({_s})%s" to player
+		set {_totalminutes} to round({restart::countdown} / 60)
+		send "&a[Serveur] &eProchain redémarrage dans &6~%{_totalminutes}% minute(s)" to player

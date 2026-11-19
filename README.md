@@ -31,20 +31,25 @@ Le workflow tourne **toutes les heures** (`0 * * * *`). À chaque exécution, le
 
 Oui, c'est possible : en renseignant le secret `DISCORD_WEBHOOK`, le script envoie automatiquement un message dans le salon Discord relié au webhook à chaque exécution (succès, échec, ou "pas d'action pendant la plage 1h-6h").
 
-En plus du webhook, le script écrit un petit fichier `restart_schedule.json` à la racine du dépôt avec l'heure estimée du prochain arrêt forcé (déduite du compte à rebours affiché par Minestrator) :
+En plus du webhook, le script écrit deux fichiers à la racine du dépôt avec l'estimation du prochain arrêt forcé (déduite du compte à rebours affiché par Minestrator) :
 
-```json
-{
-  "next_restart_utc": "2026-11-19T18:42:00Z",
-  "next_restart_epoch": 1795123200,
-  "seconds_remaining": 8040,
-  "updated_utc": "2026-11-19T14:40:03Z",
-  "frozen": false
-}
-```
+- `restart_schedule.json` — pour lecture humaine / debug :
+  ```json
+  {
+    "next_restart_utc": "2026-11-19T18:42:00Z",
+    "next_restart_epoch": 1795123200,
+    "seconds_remaining": 8040,
+    "updated_utc": "2026-11-19T14:40:03Z",
+    "frozen": false
+  }
+  ```
+- `restart_schedule.txt` — format minimal pour Skript, sans dépendre d'un addon JSON :
+  ```
+  frozen=0;seconds_remaining=8040
+  ```
 
-Ce fichier est commité automatiquement par le workflow, ce qui le rend accessible publiquement via son URL "raw" GitHub :
-`https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.json`
+Ces fichiers sont commités automatiquement par le workflow, ce qui les rend accessibles publiquement via leur URL "raw" GitHub, par exemple :
+`https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.txt`
 
 ## 🧩 Annonces in-game avec Skript
 
@@ -57,9 +62,8 @@ Un plugin Minestrator (Skript) ne peut pas "recevoir" un webhook Discord entrant
    - une annonce finale au moment du redémarrage.
 4. Comme le workflow GitHub ne tourne pas en continu, le compte à rebours est une **variable Skript persistante**, donc il continue à descendre correctement même entre deux exécutions du workflow.
 
-**Addons requis côté serveur :**
-- [SkBee](https://github.com/ShaneBeeStudios/SkBee) — déjà installé.
-- **[skJson](https://github.com/cooffeeRequired/skJson)** — c'est cet addon qui fournit les requêtes HTTP **et** le parsing JSON. SkBee seul ne sait pas faire de requête web, d'où les erreurs si tu n'as que SkBee.
+**Addon requis côté serveur : [Reqn](https://github.com/btk5h/reqn/releases)** (léger, juste pour l'HTTP).
+SkBee **ne fait pas** de requêtes HTTP (NBT, scoreboards, structures... rien côté web) — ce n'est donc pas lui qu'il faut pour ça. Pour éviter de dépendre d'un addon JSON en plus, le fichier distant est au format texte tout simple (`frozen=0;seconds_remaining=8040`), lu avec la fonction native Skript `split at` — aucun addon JSON n'est nécessaire.
 
 **Commande incluse** : `/prochainredemarrage` (alias `/restarttime`, `/nextrestart`), protégée par la permission `minestrator.restart.info`, donne à un joueur/OP le temps restant avant le prochain redémarrage.
 

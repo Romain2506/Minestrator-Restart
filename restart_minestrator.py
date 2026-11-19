@@ -193,6 +193,15 @@ def write_restart_schedule(remaining: str, frozen: bool):
     except Exception as e:
         print(f"⚠️ Impossible d'écrire restart_schedule.json : {e}")
 
+    # Format texte minimal pour Skript (pas besoin d'addon JSON, juste de "split at")
+    try:
+        txt_line = f"frozen={'1' if frozen else '0'};seconds_remaining={seconds}"
+        with open("restart_schedule.txt", "w", encoding="utf-8") as f:
+            f.write(txt_line)
+        print(f"📝 restart_schedule.txt écrit : {txt_line}")
+    except Exception as e:
+        print(f"⚠️ Impossible d'écrire restart_schedule.txt : {e}")
+
 
 # ============================================================
 # Turnstile invisible : injection d'un écouteur + hook pour capturer

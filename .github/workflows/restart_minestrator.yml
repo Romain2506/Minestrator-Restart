@@ -84,10 +84,10 @@ jobs:
       - name: 📤 Commit restart_schedule.json
         if: always()
         run: |
-          if [ -f restart_schedule.json ]; then
+          if [ -f restart_schedule.json ] || [ -f restart_schedule.txt ]; then
             git config user.name "github-actions"
             git config user.email "actions@github.com"
-            git add restart_schedule.json
-            git commit -m "chore: update restart_schedule.json [skip ci]" || echo "Rien à committer"
+            git add restart_schedule.json restart_schedule.txt 2>/dev/null || true
+            git commit -m "chore: update restart schedule [skip ci]" || echo "Rien à committer"
             git push || echo "⚠️ push échoué (ok si rien à commit)"
           fi
