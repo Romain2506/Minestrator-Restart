@@ -17,7 +17,6 @@ Une **plage de maintenance silencieuse de 1h à 6h du matin (heure de Paris)** e
 | `TG_BOT` | ⬜ Optionnel | 📨 Notification Telegram : Chat ID et Bot Token séparés par une virgule | `987654321,123456:AAFxxx` |
 | `DISCORD_WEBHOOK` | ⬜ Optionnel | 📣 URL d'un webhook Discord pour recevoir les notifications de redémarrage dans un salon | `https://discord.com/api/webhooks/xxx/yyy` |
 
-> ✅ Le dépôt étant public, plus aucun identifiant n'est écrit en clair dans `restart_minestrator.py` : tout passe par les secrets GitHub ci-dessus.
 
 ## 🕐 Horaires d'exécution
 
@@ -42,8 +41,8 @@ En plus du webhook, le script écrit un petit fichier `restart_schedule.json` à
 }
 ```
 
-Ce fichier est commité automatiquement par le workflow, ce qui le rend accessible publiquement (si le dépôt est public) via son URL "raw" GitHub, par exemple :
-`https://raw.githubusercontent.com/<user>/<repo>/main/restart_schedule.json`
+Ce fichier est commité automatiquement par le workflow, ce qui le rend accessible publiquement via son URL "raw" GitHub :
+`https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.json`
 
 ## 🧩 Annonces in-game avec Skript
 

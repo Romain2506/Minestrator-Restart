@@ -3,7 +3,11 @@ name: Minestrator-Restart
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 */3 * * *'   # 每 3 小时自动执行一次，防止 GitHub Actions 延迟导致满 4 小时被关机
+    - cron: '0 * * * *'   # toutes les heures ; le script décide lui-même s'il doit agir
+                           # (pause silencieuse 1h-6h heure de Paris, gérée côté Python avec zoneinfo)
+
+permissions:
+  contents: write   # nécessaire pour committer restart_schedule.json
 
 jobs:
   run_minestrator_restart:
@@ -66,6 +70,7 @@ jobs:
           MINESTRATOR_AUTH: ${{ secrets.MINESTRATOR_AUTH }}
           GOST_PROXY: ${{ secrets.GOST_PROXY }}
           TG_BOT: ${{ secrets.TG_BOT }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
         run: |
           xvfb-run --auto-servernum --server-args="-screen 0 1920x1080x24" python restart_minestrator.py
 
@@ -75,3 +80,14 @@ jobs:
         with:
           name: debug-screenshots
           path: "*.png"
+
+      - name: 📤 Commit restart_schedule.json
+        if: always()
+        run: |
+          if [ -f restart_schedule.json ]; then
+            git config user.name "github-actions"
+            git config user.email "actions@github.com"
+            git add restart_schedule.json
+            git commit -m "chore: update restart_schedule.json [skip ci]" || echo "Rien à committer"
+            git push || echo "⚠️ push échoué (ok si rien à commit)"
+          fi

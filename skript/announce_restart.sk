@@ -15,7 +15,7 @@
 # ============================================================
 
 options:
-	schedule_url: "https://raw.githubusercontent.com/TON_USER/TON_REPO/main/restart_schedule.json"
+	schedule_url: "https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.json"
 
 # --- variables persistantes (sauvegardées automatiquement par Skript) ---
 # {restart::next_epoch}   -> timestamp Unix (secondes) du prochain redémarrage connu
