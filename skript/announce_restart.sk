@@ -1,57 +1,85 @@
 # ============================================================
 # announce_restart.sk
 #
-# Annonce dans le chat le redémarrage programmé du serveur
-# (celui déclenché par le workflow GitHub Minestrator-Restart),
-# avec un rappel 5 minutes avant.
+# Annonce dans le chat le redémarrage programmé du serveur (celui
+# déclenché par le workflow GitHub Minestrator-Restart), avec un
+# rappel 5 minutes avant.
 #
-# Pré-requis : addon SkBee (https://github.com/ShaneBeeStudios/SkBee)
-#   -> fournit l'effet "send http get request" utilisé ci-dessous.
-#   Si tu utilises un autre addon HTTP (skript-reflect, skRayFall...),
-#   remplace juste la partie "récupération du JSON" par l'équivalent
-#   de cet addon ; le reste de la logique ne change pas.
+# Pré-requis :
+#   - SkBee (déjà installé)
+#   - skJson (https://github.com/cooffeeRequired/skJson) : c'est CET
+#     addon qui fournit les requêtes HTTP ET le JSON, pas SkBee.
+#     SkBee seul ne peut pas faire de requête web.
 #
-# Remplace l'URL ci-dessous par l'URL "raw" de TON dépôt GitHub.
+# Remplace l'URL ci-dessous si tu changes de dépôt/compte GitHub.
 # ============================================================
 
 options:
 	schedule_url: "https://raw.githubusercontent.com/Romain2506/Minestrator-Restart/main/restart_schedule.json"
 
-# --- variables persistantes (sauvegardées automatiquement par Skript) ---
-# {restart::next_epoch}   -> timestamp Unix (secondes) du prochain redémarrage connu
-# {restart::warned_5min}  -> true si le rappel "5 minutes" a déjà été annoncé pour ce créneau
-# {restart::fired}        -> true si l'annonce finale a déjà été faite pour ce créneau
+# Variables persistantes (sauvegardées automatiquement par Skript) :
+# {restart::countdown}   -> secondes restantes avant le prochain redémarrage (décompte chaque minute)
+# {restart::warned_5min} -> true si le rappel "5 minutes" a déjà été annoncé pour ce créneau
+# {restart::fired}       -> true si l'annonce finale a déjà été faite pour ce créneau
 
+# --- 1. Toutes les 5 minutes : on va chercher l'info à jour sur GitHub ---
+every 5 minutes:
+	set {_req} to prepare GET request on {@schedule_url}
+	execute {_req}
+	set {_res} to last response of {_req}
+
+	if {_res} is set:
+		if status code of {_res} is 200:
+			set {_json} to parse "%body of {_res}%" as json
+			set {_frozen} to value at path "frozen" in {_json}
+
+			if {_frozen} is true or {_frozen} is "true":
+				# pause 1h-6h en cours : on coupe le compte à rebours, pas d'annonce
+				set {restart::countdown} to -1
+			else:
+				set {_seconds} to value at path "seconds_remaining" in {_json}
+				if {_seconds} is set:
+					# on resynchronise le compte à rebours sur la valeur officielle
+					set {restart::countdown} to {_seconds}
+					set {restart::warned_5min} to false
+					set {restart::fired} to false
+		else:
+			loop all players:
+				if loop-player is op:
+					send "&7[Serveur] Impossible de lire le planning de redémarrage (code HTTP %status code of {_res}%)" to loop-player
+
+# --- 2. Toutes les minutes : le compte à rebours descend et on annonce au bon moment ---
 every 1 minute:
-	# 1. on récupère le planning depuis GitHub
-	send http get request to {@schedule_url}:
-		set {_json} to the text response
+	if {restart::countdown} is set:
+		if {restart::countdown} > 0:
+			subtract 60 from {restart::countdown}
 
-	if {_json} is set:
-		set {_epoch} to the integer in {_json} at "next_restart_epoch" # adapte selon ton addon de parsing JSON
-		set {_frozen} to the boolean in {_json} at "frozen"
+			if {restart::countdown} <= 300:
+				if {restart::warned_5min} is not set:
+					broadcast "&e&l[Serveur] &eRedémarrage dans &c5 minutes&e. Pense à terminer ce que tu fais !"
+					set {restart::warned_5min} to true
 
-		if {_frozen} is true:
-			stop trigger # on est dans la plage 1h-6h, rien à annoncer
+			if {restart::countdown} <= 0:
+				if {restart::fired} is not set:
+					broadcast "&c&l[Serveur] &cRedémarrage en cours...&r &7(maintenance automatique)"
+					set {restart::fired} to true
 
-		if {_epoch} is set:
-			if {restart::next_epoch} is not {_epoch}:
-				# nouveau créneau détecté -> on réinitialise les drapeaux d'annonce
-				set {restart::next_epoch} to {_epoch}
-				set {restart::warned_5min} to false
-				set {restart::fired} to false
+# --- 3. Commande pour un joueur/op : connaître le temps restant avant le prochain redémarrage ---
+command /prochainredemarrage:
+	permission: minestrator.restart.info
+	permission message: "&cTu n'as pas la permission d'utiliser cette commande."
+	aliases: /restarttime, /nextrestart
+	trigger:
+		if {restart::countdown} is not set:
+			send "&7Aucune information de redémarrage disponible pour le moment." to player
+			stop
 
-	# 2. calcul du temps restant par rapport au créneau mémorisé
-	if {restart::next_epoch} is set:
-		set {_now} to difference between date "01/01/1970 00:00:00" and now # astuce pour obtenir l'epoch actuel en secondes
-		set {_remaining} to {restart::next_epoch} - {_now}
+		if {restart::countdown} < 0:
+			send "&7Le serveur est en pause de maintenance (1h-6h), pas de redémarrage prévu pour l'instant." to player
+			stop
 
-		# rappel à 5 minutes (entre 4min30 et 5min pour laisser une marge à la boucle "every 1 minute")
-		if {_remaining} <= 300 and {_remaining} > 0 and {restart::warned_5min} is not true:
-			broadcast "&e&l[Serveur] &eRedémarrage dans &c5 minutes&e. Pense à terminer ce que tu fais !"
-			set {restart::warned_5min} to true
+		set {_h} to {restart::countdown} / 3600
+		set {_m} to ({restart::countdown} mod 3600) / 60
+		set {_s} to {restart::countdown} mod 60
 
-		# annonce finale au moment du redémarrage
-		if {_remaining} <= 0 and {restart::fired} is not true:
-			broadcast "&c&l[Serveur] &cRedémarrage en cours...&r &7(maintenance automatique)"
-			set {restart::fired} to true
+		send "&a[Serveur] &eProchain redémarrage dans &6%round({_h})%h %round({_m})%m %round({_s})%s" to player

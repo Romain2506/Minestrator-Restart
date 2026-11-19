@@ -181,7 +181,8 @@ def write_restart_schedule(remaining: str, frozen: bool):
         next_restart_epoch = int(dt.timestamp())
     data = {
         "next_restart_utc": next_restart_iso,
-        "next_restart_epoch": next_restart_epoch,  # secondes Unix, plus simple à lire côté Skript
+        "next_restart_epoch": next_restart_epoch,
+        "seconds_remaining": seconds,  # simple compteur en secondes, le plus facile à exploiter côté Skript
         "updated_utc": datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
         "frozen": frozen,
     }

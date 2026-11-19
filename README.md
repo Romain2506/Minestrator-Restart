@@ -36,6 +36,8 @@ En plus du webhook, le script écrit un petit fichier `restart_schedule.json` à
 ```json
 {
   "next_restart_utc": "2026-11-19T18:42:00Z",
+  "next_restart_epoch": 1795123200,
+  "seconds_remaining": 8040,
   "updated_utc": "2026-11-19T14:40:03Z",
   "frozen": false
 }
@@ -48,11 +50,17 @@ Ce fichier est commité automatiquement par le workflow, ce qui le rend accessib
 
 Un plugin Minestrator (Skript) ne peut pas "recevoir" un webhook Discord entrant (les webhooks Discord sont à sens unique : vers Discord uniquement). La solution retenue est donc :
 
-1. Le script Python calcule `next_restart_utc` et le publie dans `restart_schedule.json` (voir ci-dessus).
-2. Un script Skript, **avec l'addon [SkBee](https://github.com/ShaneBeeStudios/SkBee)** (qui fournit les effets HTTP GET), interroge cette URL toutes les minutes.
-3. Le script Skript compare l'heure récupérée à l'heure actuelle du serveur et déclenche :
-   - une annonce à **5 minutes** avant `next_restart_utc`,
-   - une annonce finale à l'heure du redémarrage.
-4. Comme le workflow GitHub ne tourne pas en continu, l'heure `next_restart_utc` est mémorisée dans une **variable Skript persistante** (`{restart::next}`), ce qui permet au serveur de continuer à annoncer correctement même entre deux exécutions du workflow.
+1. Le script Python calcule `seconds_remaining` (temps restant avant la coupure forcée) et le publie dans `restart_schedule.json` (voir ci-dessus).
+2. Un script Skript interroge cette URL **toutes les 5 minutes** et resynchronise un compte à rebours interne (`{restart::countdown}`), qui descend ensuite de lui-même chaque minute.
+3. Il déclenche :
+   - une annonce à **5 minutes** avant le redémarrage,
+   - une annonce finale au moment du redémarrage.
+4. Comme le workflow GitHub ne tourne pas en continu, le compte à rebours est une **variable Skript persistante**, donc il continue à descendre correctement même entre deux exécutions du workflow.
 
-Voir `skript/announce_restart.sk` fourni dans ce dépôt pour un exemple fonctionnel (à adapter au nom exact des options de ton addon HTTP).
+**Addons requis côté serveur :**
+- [SkBee](https://github.com/ShaneBeeStudios/SkBee) — déjà installé.
+- **[skJson](https://github.com/cooffeeRequired/skJson)** — c'est cet addon qui fournit les requêtes HTTP **et** le parsing JSON. SkBee seul ne sait pas faire de requête web, d'où les erreurs si tu n'as que SkBee.
+
+**Commande incluse** : `/prochainredemarrage` (alias `/restarttime`, `/nextrestart`), protégée par la permission `minestrator.restart.info`, donne à un joueur/OP le temps restant avant le prochain redémarrage.
+
+Voir `skript/announce_restart.sk` fourni dans ce dépôt.
