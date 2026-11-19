@@ -33,6 +33,14 @@ TG_TOKEN = TG_TOKEN.strip()
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK", "").strip()
 
+# User-Agent "navigateur" : Discord (derrière Cloudflare) renvoie parfois une
+# erreur 403 Forbidden aux requêtes envoyées avec le User-Agent par défaut de
+# urllib ("Python-urllib/3.x"). On imite un navigateur pour éviter ce blocage.
+BROWSER_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
+
 # ============================================================
 # Plage de maintenance silencieuse : pas de redémarrage
 # entre 1h et 6h, heure de Paris (gère automatiquement l'heure d'été/hiver)
@@ -52,7 +60,7 @@ API_URL    = f"https://mine.sttr.io/server/{SERVER_ID}/poweraction"
 
 
 # ============================================================
-# TG 推送（支持完整图文推送 + 纯文本回退）
+# Notification Telegram (texte + photo avec repli en texte seul)
 # ============================================================
 
 def now_str():
@@ -62,13 +70,13 @@ def now_str():
 
 def send_tg(result, detail='', photo_path=None):
     if not TG_TOKEN or not TG_CHAT_ID:
-        print("ℹ️ 未配置 TG_BOT，跳过推送")
+        print("ℹ️ TG_BOT non configuré, notification ignorée")
         return
     msg = (
-        f"🎮 Minestrator 重启通知\n"
-        f"🕐 运行时间: {now_str()}\n"
-        f"🖥 服务器ID: {SERVER_ID}\n"
-        f"📊 结果: {result}\n"
+        f"🎮 Notification Minestrator\n"
+        f"🕐 Heure d'exécution : {now_str()}\n"
+        f"🖥 ID serveur : {SERVER_ID}\n"
+        f"📊 Résultat : {result}\n"
         f"{detail}"
     ).strip()
 
@@ -102,19 +110,19 @@ def send_tg(result, detail='', photo_path=None):
         try:
             req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(req, timeout=30):
-                print(f"📨 TG图文推送成功 ({filename})")
+                print(f"📨 Notification Telegram (photo) envoyée ({filename})")
             return
         except Exception as e:
-            print(f"⚠️ TG图片推送失败，回退为纯文本推送：{e}")
+            print(f"⚠️ Échec envoi photo Telegram, repli en texte seul : {e}")
 
     url = f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage"
     data = urllib.parse.urlencode({"chat_id": TG_CHAT_ID, "text": msg}).encode()
     try:
         req = urllib.request.Request(url, data=data, method="POST")
         with urllib.request.urlopen(req, timeout=15):
-            print("📨 TG文本推送成功")
+            print("📨 Notification Telegram (texte) envoyée")
     except Exception as e:
-        print(f"⚠️ TG推送失败：{e}")
+        print(f"⚠️ Échec notification Telegram : {e}")
 
 
 def send_discord(title: str, detail: str = ""):
@@ -122,17 +130,27 @@ def send_discord(title: str, detail: str = ""):
     if not DISCORD_WEBHOOK:
         print("ℹ️ DISCORD_WEBHOOK non configuré, notification Discord ignorée")
         return
-    content = f"**🎮 Minestrator — {title}**\n🕐 {now_str()}\n🖥 Serveur: {SERVER_ID}\n{detail}".strip()
+    content = f"**🎮 Minestrator — {title}**\n🕐 {now_str()}\n🖥 Serveur : {SERVER_ID}\n{detail}".strip()
     payload = json.dumps({"content": content[:1900]}).encode("utf-8")
     try:
         req = urllib.request.Request(
             DISCORD_WEBHOOK,
             data=payload,
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "User-Agent": BROWSER_USER_AGENT,
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=15):
             print("📨 Webhook Discord envoyé")
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode("utf-8", errors="ignore")
+        except Exception:
+            pass
+        print(f"⚠️ Échec webhook Discord : HTTP {e.code} {e.reason} — {body}")
     except Exception as e:
         print(f"⚠️ Échec webhook Discord : {e}")
 
@@ -176,7 +194,8 @@ def write_restart_schedule(remaining: str, frozen: bool):
 
 
 # ============================================================
-# Invisible Turnstile：注入监听器 + Hook 捕获 Token 与响应
+# Turnstile invisible : injection d'un écouteur + hook pour capturer
+# le token et les réponses réseau
 # ============================================================
 
 INJECT_TOKEN_LISTENER_JS = """
@@ -242,37 +261,39 @@ READ_TOKEN_JS = "(function(){ return window.__cf_turnstile_token__ || ''; })()"
 def inject_listener(sb):
     try:
         sb.execute_script(INJECT_TOKEN_LISTENER_JS)
-        print("📡 Turnstile 监听器已注入")
+        print("📡 Écouteur Turnstile injecté")
     except Exception as e:
-        print(f"⚠️ 监听器注入失败：{e}")
+        print(f"⚠️ Échec injection de l'écouteur : {e}")
 
 
 def wait_for_token(sb, timeout=15) -> str:
-    print(f"⏳ 等待 Turnstile Token 自动生成（最多 {timeout} 秒）...")
+    print(f"⏳ Attente de génération automatique du token Turnstile (max {timeout}s)...")
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
             token = sb.execute_script(READ_TOKEN_JS)
             if token and len(token) > 30:
-                print(f"✅ Token 已捕获（长度 {len(token)}）")
+                print(f"✅ Token capturé (longueur {len(token)})")
                 return token
         except Exception:
             pass
         time.sleep(1)
 
-    print("ℹ️ 未单独捕获到明文 Turnstile Token")
+    print("ℹ️ Aucun token Turnstile en clair capturé individuellement")
     return ''
 
 
 # ============================================================
-# 服务器电源控制：同时支持“离线开机 (Démarrer)”与“在线重启 (Restart)”
+# Contrôle d'alimentation du serveur : gère à la fois
+# "démarrage hors-ligne (Démarrer)" et "redémarrage en ligne (Restart)"
 # ============================================================
 
 def check_server_and_click_power(sb) -> dict:
     """
-    识别当前服务器是离线 (Hors ligne / Offline) 还是在线 (En ligne / Online)：
-    - 若已离线：自动点击绿色的 'Démarrer le serveur' 或 'Démarrer' 按钮开机
-    - 若在线中：自动点击左上角三个并排按钮中的黄色重启按钮，刷新 4 小时倒计时
+    Détecte si le serveur est actuellement hors ligne (Offline) ou en ligne (Online) :
+    - S'il est hors ligne : clique automatiquement sur le bouton vert 'Démarrer le serveur' / 'Démarrer'
+    - S'il est en ligne : clique automatiquement sur le bouton jaune de redémarrage (parmi les 3
+      boutons alignés en haut à gauche), ce qui réinitialise le compte à rebours de 4h
     """
     js_power = """
     (function() {
@@ -294,14 +315,14 @@ def check_server_and_click_power(sb) -> dict:
         }
 
         if (/Hors ligne|Serveur hors ligne|Offline|Server offline/i.test(bodyText)) {
-            res.status = 'Offline (已关机)';
+            res.status = 'Offline (hors ligne)';
         } else if (/En ligne|Online/i.test(bodyText)) {
-            res.status = 'Online (运行中)';
+            res.status = 'Online (en ligne)';
         }
 
         var allBtns = Array.from(document.querySelectorAll('button'));
 
-        // 1. 情况 A：服务器处于关机状态 -> 寻找绿色 Démarrer / Start 按钮并点击开机
+        // 1. Cas A : le serveur est hors ligne -> chercher le bouton vert Démarrer / Start et cliquer dessus
         for (var i = 0; i < allBtns.length; i++) {
             var b = allBtns[i];
             if (b.offsetParent === null || b.disabled) continue;
@@ -310,30 +331,31 @@ def check_server_and_click_power(sb) -> dict:
                 b.click();
                 res.clicked = true;
                 res.action_type = 'start';
-                res.detail = '已点击绿色启动按钮 (' + txt + ')';
+                res.detail = 'Bouton vert de démarrage cliqué (' + txt + ')';
                 return res;
             }
         }
 
-        // 2. 情况 B：服务器处于运行中状态 -> 寻找左上角并排的三个控制按钮（蓝、黄、红），点击中间黄色重启按钮
+        // 2. Cas B : le serveur est en ligne -> chercher les 3 boutons alignés en haut à gauche
+        //    (bleu, jaune, rouge) et cliquer sur le bouton jaune du milieu (redémarrage)
         for (var j = 0; j < allBtns.length; j++) {
             var parent = allBtns[j].parentElement;
             if (!parent) continue;
             var siblingBtns = parent.querySelectorAll(':scope > button');
             if (siblingBtns.length === 3) {
                 var blueBtn   = siblingBtns[0];
-                var yellowBtn = siblingBtns[1]; // 中间黄色按钮为重启 (Restart)
+                var yellowBtn = siblingBtns[1]; // le bouton jaune du milieu = redémarrage (Restart)
                 if (yellowBtn && !yellowBtn.disabled) {
                     yellowBtn.click();
                     res.clicked = true;
                     res.action_type = 'restart';
-                    res.detail = '已点击左上角黄色重启按钮 (Restart)';
+                    res.detail = 'Bouton jaune de redémarrage cliqué (Restart)';
                     return res;
                 } else if (blueBtn && !blueBtn.disabled) {
                     blueBtn.click();
                     res.clicked = true;
                     res.action_type = 'start';
-                    res.detail = '已点击左上角蓝色启动按钮';
+                    res.detail = 'Bouton bleu de démarrage cliqué';
                     return res;
                 }
             }
@@ -344,15 +366,15 @@ def check_server_and_click_power(sb) -> dict:
     """
     try:
         data = sb.execute_script(js_power) or {}
-        print(f"🔍 页面状态检测：{data}")
+        print(f"🔍 État de la page détecté : {data}")
         return data
     except Exception as e:
-        print(f"⚠️ 页面电源按钮操作异常：{e}")
+        print(f"⚠️ Erreur lors du clic sur les boutons d'alimentation : {e}")
         return {}
 
 
 def get_countdown_text(sb) -> str:
-    """获取刷新后的 4 小时倒计时文本"""
+    """Récupère le texte du compte à rebours de 4h après rafraîchissement de la page."""
     try:
         txt = sb.execute_script(r"""
             (function(){
@@ -377,7 +399,8 @@ def get_countdown_text(sb) -> str:
 
 
 # ============================================================
-# API：通过浏览器 fetch 发送重启/启动指令（不使用 arguments，兼容 CDP）
+# API : envoi de l'ordre de redémarrage/démarrage via fetch dans le
+# navigateur (n'utilise pas "arguments", compatible CDP)
 # ============================================================
 
 def send_power_api(sb, token: str, action: str = "restart") -> bool:
@@ -388,7 +411,8 @@ def send_power_api(sb, token: str, action: str = "restart") -> bool:
     api_url_js = json.dumps(API_URL)
     action_js = json.dumps(action)
 
-    # 使用全局变量轮询代替 execute_async_script 的 arguments[0]，彻底杜绝 ReferenceError: arguments is not defined
+    # Utilise un sondage de variable globale plutôt qu'execute_async_script avec
+    # arguments[0], pour éviter totalement l'erreur "ReferenceError: arguments is not defined"
     trigger_js = f"""
     (function() {{
         window.__api_power_done__ = false;
@@ -421,28 +445,28 @@ def send_power_api(sb, token: str, action: str = "restart") -> bool:
             done = sb.execute_script("(function(){ return !!window.__api_power_done__; })()")
             if done:
                 result = sb.execute_script("(function(){ return window.__api_power_result__; })()") or {}
-                print(f"📡 API ({action}) 响应：{result}")
+                print(f"📡 Réponse API ({action}) : {result}")
                 if result.get("ok") and result.get("data", {}).get("api", {}).get("code") == 200:
-                    print(f"✅ API ({action}) 指令已成功送达！")
+                    print(f"✅ Commande API ({action}) envoyée avec succès !")
                     return True
                 return False
             time.sleep(1)
         return False
     except Exception as e:
-        print(f"⚠️ API 请求异常：{e}")
+        print(f"⚠️ Erreur lors de la requête API : {e}")
         return False
 
 
 def click_login_btn(sb):
-    """点击登录按钮（不使用 arguments）"""
+    """Clique sur le bouton de connexion (sans utiliser 'arguments')."""
     try:
         if sb.is_element_visible("button:contains('Se connecter')"):
             sb.click("button:contains('Se connecter')")
-            print("✅ 已点击 Se connecter 登录按钮")
+            print("✅ Bouton 'Se connecter' cliqué")
             return
         elif sb.is_element_visible("button[type='submit']"):
             sb.click("button[type='submit']")
-            print("✅ 已点击 submit 登录按钮")
+            print("✅ Bouton submit cliqué")
             return
     except Exception:
         pass
@@ -460,13 +484,13 @@ def click_login_btn(sb):
                 }
             })()
         """)
-        print("✅ 已通过 JS 触发登录按钮点击")
+        print("✅ Clic sur le bouton de connexion déclenché via JS")
     except Exception as e:
-        print(f"⚠️ 登录按钮点击异常：{e}")
+        print(f"⚠️ Erreur lors du clic sur le bouton de connexion : {e}")
 
 
 # ============================================================
-# 主流程
+# Flux principal
 # ============================================================
 
 def run_script():
@@ -482,33 +506,33 @@ def run_script():
         send_discord("Pause nocturne (1h-6h)", msg)
         return
 
-    print("🔧 启动浏览器...")
+    print("🔧 Démarrage du navigateur...")
 
     sb_kwargs = dict(uc=True, test=True)
     if LOCAL_PROXY:
         sb_kwargs["proxy"] = LOCAL_PROXY
-        print(f"🌐 使用代理：{LOCAL_PROXY}")
+        print(f"🌐 Utilisation du proxy : {LOCAL_PROXY}")
     else:
-        print("ℹ️ 未配置代理，直连运行")
+        print("ℹ️ Aucun proxy configuré, connexion directe")
 
     with SB(**sb_kwargs) as sb:
-        print("🚀 浏览器就绪！")
+        print("🚀 Navigateur prêt !")
 
-        # ── 1. IP 验证 ───────────────────────────────────────
-        print("🌐 验证出口IP...")
+        # ── 1. Vérification de l'IP de sortie ───────────────────────────
+        print("🌐 Vérification de l'IP de sortie...")
         try:
             sb.open("https://api.ipify.org/?format=json")
             ip_text = re.sub(r'(\d+\.\d+\.\d+\.)\d+', r'\1xx', sb.get_text('body'))
-            print(f"✅ 出口IP确认：{ip_text}")
+            print(f"✅ IP de sortie confirmée : {ip_text}")
         except Exception:
-            print("⚠️ IP验证超时，跳过")
+            print("⚠️ Vérification de l'IP expirée, on continue")
 
-        # ── 2. 登录（采用第8轮已验证成功的原生 sb.type 方式）───
-        print("🔑 打开登录页面...")
+        # ── 2. Connexion ─────────────────────────────────────────────
+        print("🔑 Ouverture de la page de connexion...")
         sb.uc_open_with_reconnect(LOGIN_URL, reconnect_time=5)
         time.sleep(3)
 
-        print("✏️ 填写账号密码...")
+        print("✏️ Saisie des identifiants...")
         try:
             sb.wait_for_element_visible("input[type='password']", timeout=25)
 
@@ -524,55 +548,55 @@ def run_script():
             for sel in user_selectors:
                 if sb.is_element_visible(sel):
                     sb.type(sel, EMAIL)
-                    print(f"✅ 已使用选择器填写账号: {sel}")
+                    print(f"✅ Identifiant saisi via le sélecteur : {sel}")
                     typed_user = True
                     break
             if not typed_user:
-                raise RuntimeError("未找到可见的账号输入框")
+                raise RuntimeError("Aucun champ de saisie du compte visible n'a été trouvé")
 
             sb.type("input[type='password']", PASSWORD)
         except Exception as e:
-            print(f"❌ 登录框加载或填写失败：{e}")
+            print(f"❌ Échec du chargement/remplissage du formulaire de connexion : {e}")
             sb.save_screenshot("login_fail.png")
-            send_tg("❌ 登录框加载失败", f"原因: {e}", photo_path="login_fail.png")
+            send_tg("❌ Échec du formulaire de connexion", f"Raison : {e}", photo_path="login_fail.png")
             return
 
-        print("📤 提交登录请求...")
+        print("📤 Envoi de la demande de connexion...")
         time.sleep(1)
         click_login_btn(sb)
 
-        print("⏳ 等待登录跳转...")
+        print("⏳ Attente de la redirection après connexion...")
         for sec in range(45):
             try:
                 cur_url = sb.get_current_url()
                 if "/connexion" not in cur_url:
-                    print(f"✅ 登录成功！当前页：{cur_url}")
+                    print(f"✅ Connexion réussie ! Page actuelle : {cur_url}")
                     break
                 if sec in (12, 25):
-                    print(f"🔄 等待 {sec}s 仍未跳转，尝试补充点击登录按钮...")
+                    print(f"🔄 Toujours pas de redirection après {sec}s, nouvelle tentative de clic...")
                     click_login_btn(sb)
             except Exception:
                 pass
             time.sleep(1)
         else:
-            print("❌ 登录等待超时")
+            print("❌ Délai d'attente de connexion dépassé")
             sb.save_screenshot("login_timeout.png")
-            send_tg("❌ 登录等待超时", "提交账号密码后页面未跳转，请查看截图", photo_path="login_timeout.png")
+            send_tg("❌ Délai de connexion dépassé", "La page n'a pas changé après l'envoi des identifiants, voir la capture d'écran", photo_path="login_timeout.png")
             return
 
-        # ── 3. 跳转服务器管理页并注入监听器 ──────────────────
-        print(f"🔃 跳转至服务器管理页：{SERVER_URL}")
+        # ── 3. Accès à la page de gestion du serveur et injection de l'écouteur ──
+        print(f"🔃 Accès à la page de gestion du serveur : {SERVER_URL}")
         sb.open(SERVER_URL)
         time.sleep(5)
-        print(f"📄 当前页面：{sb.get_current_url()}")
+        print(f"📄 Page actuelle : {sb.get_current_url()}")
         inject_listener(sb)
         sb.save_screenshot("server_page.png")
 
-        # ── 4. 执行页面按钮点击（离线点 Démarrer 开机 / 在线点黄色按钮重启）
+        # ── 4. Clic sur les boutons (hors ligne -> Démarrer / en ligne -> bouton jaune Redémarrer)
         power_res = check_server_and_click_power(sb)
         ui_clicked = power_res.get("clicked", False)
         action_type = power_res.get("action_type") or "restart"
-        action_detail = power_res.get("detail") or "未匹配到按钮"
+        action_detail = power_res.get("detail") or "Aucun bouton correspondant trouvé"
         before_status = power_res.get("status", "unknown")
 
         time.sleep(4)
@@ -581,7 +605,7 @@ def run_script():
         except Exception:
             pass
 
-        # ── 5. 尝试获取 Token 并调用 API 双重保障 ────────────
+        # ── 5. Tentative de récupération du token + appel API en double sécurité ──
         token = wait_for_token(sb, timeout=15)
         api_ok = False
         if token:
@@ -592,14 +616,14 @@ def run_script():
         if not ui_clicked and not api_ok:
             sb.save_screenshot("api_fail.png")
             send_tg(
-                "❌ 重启/开机操作失败",
-                f"当前状态: {before_status}\nUI按钮与API均未能成功触发",
+                "❌ Échec du redémarrage/démarrage",
+                f"État avant action : {before_status}\nNi le clic sur le bouton ni l'API n'ont fonctionné",
                 photo_path="api_fail.png"
             )
             return
 
-        # ── 6. 等待服务器启动/重启并刷新页面读取最新 4 小时倒计时 ──
-        print("🔄 等待 12 秒让服务器完成开机/重启状态刷新...")
+        # ── 6. Attente du démarrage/redémarrage puis rafraîchissement pour lire le nouveau compte à rebours de 4h ──
+        print("🔄 Attente de 12 secondes pour laisser le serveur finir de démarrer/redémarrer...")
         time.sleep(12)
         sb.open(SERVER_URL)
         time.sleep(6)
@@ -609,21 +633,21 @@ def run_script():
         after_check = sb.execute_script("""
             (function(){
                 var t = document.body.innerText || '';
-                if (/En ligne|Online/i.test(t)) return 'Online (运行中)';
-                if (/Hors ligne|Offline/i.test(t)) return 'Offline (关机/启动中)';
-                return '未知';
+                if (/En ligne|Online/i.test(t)) return 'Online (en ligne)';
+                if (/Hors ligne|Offline/i.test(t)) return 'Offline (hors ligne/en démarrage)';
+                return 'inconnu';
             })()
         """)
 
-        countdown_line = f"⏰ 关机倒计时: {remaining}" if remaining else "⏰ 关机倒计时: 正在初始化（请查看截图）"
+        countdown_line = f"⏰ Compte à rebours avant coupure : {remaining}" if remaining else "⏰ Compte à rebours avant coupure : en cours d'initialisation (voir la capture d'écran)"
         summary = (
-            f"📌 操作前状态: {before_status}\n"
-            f"🛠 执行动作: {action_detail}\n"
-            f"🟢 当前状态: {after_check}\n"
+            f"📌 État avant action : {before_status}\n"
+            f"🛠 Action effectuée : {action_detail}\n"
+            f"🟢 État actuel : {after_check}\n"
             f"{countdown_line}"
         )
-        print(f"⏱️ 执行完成：\n{summary}")
-        send_tg("✅ 4小时重启/开机保活成功！", summary, photo_path="restart_success.png")
+        print(f"⏱️ Exécution terminée :\n{summary}")
+        send_tg("✅ Redémarrage/démarrage de maintien en ligne réussi !", summary, photo_path="restart_success.png")
         send_discord("Redémarrage réussi ✅", summary)
         write_restart_schedule(remaining=remaining, frozen=False)
 
