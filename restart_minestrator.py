@@ -49,10 +49,16 @@ FREEZE_START_HOUR = 1
 FREEZE_END_HOUR   = 6
 
 def is_in_freeze_window() -> bool:
-    if ZoneInfo is None:
+    try:
+        if ZoneInfo is None:
+            return False
+        now_paris = datetime.now(ZoneInfo("Europe/Paris"))
+        return FREEZE_START_HOUR <= now_paris.hour < FREEZE_END_HOUR
+    except Exception as e:
+        # Ne doit jamais faire planter tout le script silencieusement :
+        # en cas de doute, on considère qu'on N'EST PAS en pause (comportement normal).
+        print(f"⚠️ Erreur lors de la détection de l'heure de Paris (on continue normalement) : {e}")
         return False
-    now_paris = datetime.now(ZoneInfo("Europe/Paris"))
-    return FREEZE_START_HOUR <= now_paris.hour < FREEZE_END_HOUR
 
 LOGIN_URL  = "https://minestrator.com/connexion"
 SERVER_URL = f"https://minestrator.com/my/server/{SERVER_ID}"
@@ -663,4 +669,14 @@ def run_script():
 
 
 if __name__ == "__main__":
-    run_script()
+    try:
+        run_script()
+    except Exception as e:
+        # Filet de sécurité : même en cas de plantage imprévu, on prévient
+        # (sinon le workflow échoue silencieusement, sans aucune trace visible côté Discord/Telegram).
+        import traceback
+        err_trace = traceback.format_exc()
+        print(f"❌ Erreur fatale non gérée : {e}\n{err_trace}")
+        send_tg("❌ Erreur fatale", f"{e}")
+        send_discord("Erreur fatale ❌", f"```\n{e}\n```")
+        raise

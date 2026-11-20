@@ -20,7 +20,7 @@ Une **plage de maintenance silencieuse de 1h à 6h du matin (heure de Paris)** e
 
 ## 🕐 Horaires d'exécution
 
-Le workflow tourne **toutes les heures** (`0 * * * *`). À chaque exécution, le script vérifie l'heure actuelle à Paris :
+Le workflow tourne **toutes les heures, à la minute 17** (`17 * * * *` — volontairement pas pile à `:00`, le moment où GitHub Actions est le plus chargé et où des exécutions programmées peuvent être retardées, voire sautées). À chaque exécution, le script vérifie l'heure actuelle à Paris :
 
 - **Entre 1h et 6h du matin** : le script ne clique pas sur Redémarrer/Démarrer. Le serveur peut donc s'éteindre tout seul au bout de 4h et rester hors ligne — c'est voulu.
 - **À partir de 6h** : le script reprend normalement et redémarre/relance le serveur comme d'habitude.

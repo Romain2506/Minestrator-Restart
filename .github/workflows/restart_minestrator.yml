@@ -3,7 +3,10 @@ name: Minestrator-Restart
 on:
   workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'   # toutes les heures ; le script décide lui-même s'il doit agir
+    - cron: '17 * * * *'  # toutes les heures, à 17 (PAS pile à :00 — GitHub déconseille cron
+                           # au pile de l'heure, moment le plus chargé, où des exécutions peuvent
+                           # être retardées ou carrément sautées)
+                           # le script décide lui-même s'il doit agir
                            # (pause silencieuse 1h-6h heure de Paris, gérée côté Python avec zoneinfo)
 
 permissions:
