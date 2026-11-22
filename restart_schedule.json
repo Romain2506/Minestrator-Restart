@@ -1,7 +1,7 @@
 {
-  "next_restart_utc": "2026-11-22T19:15:33Z",
-  "next_restart_epoch": 1795374933,
-  "seconds_remaining": 10593,
-  "updated_utc": "2026-11-22T16:19:00Z",
+  "next_restart_utc": null,
+  "next_restart_epoch": null,
+  "seconds_remaining": 0,
+  "updated_utc": "2026-11-22T21:55:23Z",
   "frozen": false
 }
