@@ -326,10 +326,11 @@ def wait_for_token(sb, timeout=15) -> str:
 
 def check_server_and_click_power(sb) -> dict:
     """
-    Détecte si le serveur est actuellement hors ligne (Offline) ou en ligne (Online) :
-    - S'il est hors ligne : clique automatiquement sur le bouton vert 'Démarrer le serveur' / 'Démarrer'
-    - S'il est en ligne : clique automatiquement sur le bouton jaune de redémarrage (parmi les 3
-      boutons alignés en haut à gauche), ce qui réinitialise le compte à rebours de 4h
+    Détecte si le serveur est actuellement hors ligne (Offline) ou en ligne (Online) et clique
+    sur le bon bouton. On s'appuie sur les attributs STABLES [data-onboarding="start-button"] et
+    [data-onboarding="restart-button"] trouvés dans le vrai DOM du panel Minestrator, bien plus
+    fiables qu'une recherche de texte ou de position (qui pouvait rater le bon bouton ou mal
+    détecter le statut affiché).
     """
     js_power = """
     (function() {
@@ -342,7 +343,6 @@ def check_server_and_click_power(sb) -> dict:
         };
 
         var bodyText = document.body.innerText || '';
-
         var mTimer = bodyText.match(/S'éteint dans\\s+([^\\n]+)/i)
                   || bodyText.match(/Shutting down in\\s+([^\\n]+)/i)
                   || bodyText.match(/\\d+h\\s+\\d+m\\s+\\d+s/);
@@ -350,53 +350,42 @@ def check_server_and_click_power(sb) -> dict:
             res.countdown = mTimer[0].trim();
         }
 
+        function visible(el) {
+            return !!el && el.offsetParent !== null && !el.disabled;
+        }
+
+        var startBtn = document.querySelector('[data-onboarding="start-button"]');
+        var restartBtn = document.querySelector('[data-onboarding="restart-button"]');
+
+        // Le bouton visible (non caché par display:none côté Vue) nous dit directement
+        // le statut réel du serveur, sans dépendre d'un texte quelconque dans la page.
+        if (visible(startBtn)) {
+            res.status = 'Offline (hors ligne)';
+            startBtn.click();
+            res.clicked = true;
+            res.action_type = 'start';
+            res.detail = 'Bouton [data-onboarding=start-button] cliqué (Démarrer)';
+            return res;
+        }
+
+        if (visible(restartBtn)) {
+            res.status = 'Online (en ligne)';
+            restartBtn.click();
+            res.clicked = true;
+            res.action_type = 'restart';
+            res.detail = 'Bouton [data-onboarding=restart-button] cliqué (Restart)';
+            return res;
+        }
+
+        // Repli : si les attributs data-onboarding ont changé/disparu, on retombe sur
+        // l'ancienne heuristique texte, en testant Offline AVANT Online pour éviter le
+        // faux positif déjà rencontré.
         if (/Hors ligne|Serveur hors ligne|Offline|Server offline/i.test(bodyText)) {
             res.status = 'Offline (hors ligne)';
         } else if (/En ligne|Online/i.test(bodyText)) {
             res.status = 'Online (en ligne)';
         }
-
-        var allBtns = Array.from(document.querySelectorAll('button'));
-
-        // 1. Cas A : le serveur est hors ligne -> chercher le bouton vert Démarrer / Start et cliquer dessus
-        for (var i = 0; i < allBtns.length; i++) {
-            var b = allBtns[i];
-            if (b.offsetParent === null || b.disabled) continue;
-            var txt = (b.textContent || '').trim();
-            if (/Démarrer le serveur|Démarrer|Start server|^Start$/i.test(txt)) {
-                b.click();
-                res.clicked = true;
-                res.action_type = 'start';
-                res.detail = 'Bouton vert de démarrage cliqué (' + txt + ')';
-                return res;
-            }
-        }
-
-        // 2. Cas B : le serveur est en ligne -> chercher les 3 boutons alignés en haut à gauche
-        //    (bleu, jaune, rouge) et cliquer sur le bouton jaune du milieu (redémarrage)
-        for (var j = 0; j < allBtns.length; j++) {
-            var parent = allBtns[j].parentElement;
-            if (!parent) continue;
-            var siblingBtns = parent.querySelectorAll(':scope > button');
-            if (siblingBtns.length === 3) {
-                var blueBtn   = siblingBtns[0];
-                var yellowBtn = siblingBtns[1]; // le bouton jaune du milieu = redémarrage (Restart)
-                if (yellowBtn && !yellowBtn.disabled) {
-                    yellowBtn.click();
-                    res.clicked = true;
-                    res.action_type = 'restart';
-                    res.detail = 'Bouton jaune de redémarrage cliqué (Restart)';
-                    return res;
-                } else if (blueBtn && !blueBtn.disabled) {
-                    blueBtn.click();
-                    res.clicked = true;
-                    res.action_type = 'start';
-                    res.detail = 'Bouton bleu de démarrage cliqué';
-                    return res;
-                }
-            }
-        }
-
+        res.detail = 'Aucun bouton [data-onboarding] visible trouvé (repli texte)';
         return res;
     })()
     """
@@ -407,6 +396,19 @@ def check_server_and_click_power(sb) -> dict:
     except Exception as e:
         print(f"⚠️ Erreur lors du clic sur les boutons d'alimentation : {e}")
         return {}
+
+
+def is_server_online(sb) -> bool:
+    """Vérifie l'état réel via les mêmes attributs stables (sans cliquer)."""
+    try:
+        return bool(sb.execute_script("""
+            (function(){
+                var r = document.querySelector('[data-onboarding="restart-button"]');
+                return !!r && r.offsetParent !== null && !r.disabled;
+            })()
+        """))
+    except Exception:
+        return False
 
 
 def get_countdown_text(sb) -> str:
@@ -661,19 +663,37 @@ def run_script():
             return
 
         # ── 6. Attente du démarrage/redémarrage puis rafraîchissement pour lire le nouveau compte à rebours de 4h ──
-        print("🔄 Attente de 12 secondes pour laisser le serveur finir de démarrer/redémarrer...")
-        time.sleep(12)
+        # Un démarrage à froid (Offline -> Online) prend souvent plus de temps qu'un simple
+        # redémarrage d'un serveur déjà chaud : on attend plus longtemps dans ce cas, et on
+        # retente une fois si ça n'a toujours pas bougé.
+        first_wait = 30 if action_type == "start" else 12
+        print(f"🔄 Attente de {first_wait} secondes pour laisser le serveur finir de démarrer/redémarrer...")
+        time.sleep(first_wait)
         sb.open(SERVER_URL)
         time.sleep(6)
+
+        if action_type == "start" and not is_server_online(sb):
+            print("ℹ️ Toujours hors ligne après la 1ère attente, nouvelle tentative de clic sur Démarrer...")
+            retry = check_server_and_click_power(sb)
+            if retry.get("clicked"):
+                time.sleep(25)
+                sb.open(SERVER_URL)
+                time.sleep(6)
+
         hide_sensitive_info(sb)
         sb.save_screenshot("restart_success.png")
 
         remaining = get_countdown_text(sb)
         after_check = sb.execute_script("""
             (function(){
+                var startBtn = document.querySelector('[data-onboarding="start-button"]');
+                var restartBtn = document.querySelector('[data-onboarding="restart-button"]');
+                function visible(el){ return !!el && el.offsetParent !== null && !el.disabled; }
+                if (visible(restartBtn)) return 'Online (en ligne)';
+                if (visible(startBtn)) return 'Offline (hors ligne/en démarrage)';
                 var t = document.body.innerText || '';
-                if (/En ligne|Online/i.test(t)) return 'Online (en ligne)';
                 if (/Hors ligne|Offline/i.test(t)) return 'Offline (hors ligne/en démarrage)';
+                if (/En ligne|Online/i.test(t)) return 'Online (en ligne)';
                 return 'inconnu';
             })()
         """)
