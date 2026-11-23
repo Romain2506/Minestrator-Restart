@@ -83,6 +83,7 @@ jobs:
         with:
           name: debug-screenshots
           path: "*.png"
+          retention-days: 1   # dépôt public : on limite la fenêtre d'exposition au strict minimum
 
       - name: 📤 Commit restart_schedule.json
         if: always()

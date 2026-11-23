@@ -274,6 +274,26 @@ INJECT_TOKEN_LISTENER_JS = """
 READ_TOKEN_JS = "(function(){ return window.__cf_turnstile_token__ || ''; })()"
 
 
+def hide_sensitive_info(sb):
+    """Masque l'adresse IP/port réelle du serveur avant toute capture d'écran
+    (le dépôt étant public, les captures jointes aux Actions sont accessibles à tout le monde)."""
+    try:
+        sb.execute_script(r"""
+            (function(){
+                var all = document.querySelectorAll('body *');
+                var ipRegex = /\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(:\d+)?/;
+                for (var i = 0; i < all.length; i++) {
+                    var el = all[i];
+                    if (el.children.length === 0 && el.textContent && ipRegex.test(el.textContent)) {
+                        el.textContent = '[adresse masquée]';
+                    }
+                }
+            })()
+        """)
+    except Exception as e:
+        print(f"⚠️ Échec du masquage de l'adresse avant capture : {e}")
+
+
 def inject_listener(sb):
     try:
         sb.execute_script(INJECT_TOKEN_LISTENER_JS)
@@ -606,6 +626,7 @@ def run_script():
         time.sleep(5)
         print(f"📄 Page actuelle : {sb.get_current_url()}")
         inject_listener(sb)
+        hide_sensitive_info(sb)
         sb.save_screenshot("server_page.png")
 
         # ── 4. Clic sur les boutons (hors ligne -> Démarrer / en ligne -> bouton jaune Redémarrer)
@@ -630,6 +651,7 @@ def run_script():
                 api_ok = send_power_api(sb, token, action="start")
 
         if not ui_clicked and not api_ok:
+            hide_sensitive_info(sb)
             sb.save_screenshot("api_fail.png")
             send_tg(
                 "❌ Échec du redémarrage/démarrage",
@@ -643,6 +665,7 @@ def run_script():
         time.sleep(12)
         sb.open(SERVER_URL)
         time.sleep(6)
+        hide_sensitive_info(sb)
         sb.save_screenshot("restart_success.png")
 
         remaining = get_countdown_text(sb)
