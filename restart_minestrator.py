@@ -324,23 +324,18 @@ def wait_for_token(sb, timeout=15) -> str:
 # "démarrage hors-ligne (Démarrer)" et "redémarrage en ligne (Restart)"
 # ============================================================
 
-def check_server_and_click_power(sb) -> dict:
+def detect_power_button(sb) -> dict:
     """
-    Détecte si le serveur est actuellement hors ligne (Offline) ou en ligne (Online) et clique
-    sur le bon bouton. On s'appuie sur les attributs STABLES [data-onboarding="start-button"] et
-    [data-onboarding="restart-button"] trouvés dans le vrai DOM du panel Minestrator, bien plus
-    fiables qu'une recherche de texte ou de position (qui pouvait rater le bon bouton ou mal
-    détecter le statut affiché).
+    Détecte si le serveur est actuellement hors ligne (Offline) ou en ligne (Online), SANS
+    cliquer (la détection seule se fait en JS, mais le clic doit être un vrai clic natif —
+    voir check_server_and_click_power — car un clic JS synthétique peut être ignoré par une
+    protection anti-bot de type Cloudflare Turnstile pour les actions sensibles).
+    On s'appuie sur les attributs STABLES [data-onboarding="start-button"] et
+    [data-onboarding="restart-button"] trouvés dans le vrai DOM du panel Minestrator.
     """
-    js_power = """
+    js = """
     (function() {
-        var res = {
-            status: 'unknown',
-            clicked: false,
-            action_type: '',
-            detail: '',
-            countdown: ''
-        };
+        var res = { status: 'unknown', action_type: '', selector: '', countdown: '' };
 
         var bodyText = document.body.innerText || '';
         var mTimer = bodyText.match(/S'éteint dans\\s+([^\\n]+)/i)
@@ -357,45 +352,74 @@ def check_server_and_click_power(sb) -> dict:
         var startBtn = document.querySelector('[data-onboarding="start-button"]');
         var restartBtn = document.querySelector('[data-onboarding="restart-button"]');
 
-        // Le bouton visible (non caché par display:none côté Vue) nous dit directement
-        // le statut réel du serveur, sans dépendre d'un texte quelconque dans la page.
         if (visible(startBtn)) {
             res.status = 'Offline (hors ligne)';
-            startBtn.click();
-            res.clicked = true;
             res.action_type = 'start';
-            res.detail = 'Bouton [data-onboarding=start-button] cliqué (Démarrer)';
+            res.selector = '[data-onboarding="start-button"]';
             return res;
         }
-
         if (visible(restartBtn)) {
             res.status = 'Online (en ligne)';
-            restartBtn.click();
-            res.clicked = true;
             res.action_type = 'restart';
-            res.detail = 'Bouton [data-onboarding=restart-button] cliqué (Restart)';
+            res.selector = '[data-onboarding="restart-button"]';
             return res;
         }
 
-        // Repli : si les attributs data-onboarding ont changé/disparu, on retombe sur
-        // l'ancienne heuristique texte, en testant Offline AVANT Online pour éviter le
-        // faux positif déjà rencontré.
+        // Repli texte si les attributs data-onboarding ont changé/disparu (Offline testé
+        // AVANT Online pour éviter le faux positif déjà rencontré).
         if (/Hors ligne|Serveur hors ligne|Offline|Server offline/i.test(bodyText)) {
             res.status = 'Offline (hors ligne)';
         } else if (/En ligne|Online/i.test(bodyText)) {
             res.status = 'Online (en ligne)';
         }
-        res.detail = 'Aucun bouton [data-onboarding] visible trouvé (repli texte)';
         return res;
     })()
     """
     try:
-        data = sb.execute_script(js_power) or {}
+        data = sb.execute_script(js) or {}
         print(f"🔍 État de la page détecté : {data}")
         return data
     except Exception as e:
-        print(f"⚠️ Erreur lors du clic sur les boutons d'alimentation : {e}")
+        print(f"⚠️ Erreur lors de la détection des boutons d'alimentation : {e}")
         return {}
+
+
+def check_server_and_click_power(sb) -> dict:
+    """
+    Détecte l'état du serveur puis effectue un VRAI clic natif (Selenium/CDP, avec un
+    événement "trusted") sur le bon bouton — pas un clic JavaScript synthétique, qui peut
+    être silencieusement ignoré par une protection anti-bot (Cloudflare Turnstile) pour les
+    actions sensibles comme démarrer un serveur hors ligne.
+    """
+    info = detect_power_button(sb)
+    res = {
+        "status": info.get("status", "unknown"),
+        "clicked": False,
+        "action_type": info.get("action_type", ""),
+        "detail": "",
+        "countdown": info.get("countdown", ""),
+    }
+    selector = info.get("selector")
+    if not selector:
+        res["detail"] = "Aucun bouton [data-onboarding] visible trouvé"
+        return res
+
+    try:
+        sb.scroll_to(selector)
+        sb.click(selector)  # vrai clic natif, pas sb.execute_script(...).click()
+        res["clicked"] = True
+        res["detail"] = f"Clic natif sur {selector} ({res['action_type']})"
+    except Exception as e:
+        print(f"⚠️ Échec du clic natif sur {selector}, tentative avec uc_click : {e}")
+        try:
+            sb.uc_click(selector)
+            res["clicked"] = True
+            res["detail"] = f"Clic natif (uc_click) sur {selector} ({res['action_type']})"
+        except Exception as e2:
+            print(f"⚠️ Échec du clic natif (uc_click) également : {e2}")
+            res["detail"] = f"Échec du clic natif sur {selector} : {e2}"
+
+    return res
 
 
 def is_server_online(sb) -> bool:
@@ -637,6 +661,14 @@ def run_script():
         action_type = power_res.get("action_type") or "restart"
         action_detail = power_res.get("detail") or "Aucun bouton correspondant trouvé"
         before_status = power_res.get("status", "unknown")
+
+        # Capture immédiate juste après le clic (avant toute attente), pour voir si un
+        # Turnstile/popup/erreur apparaît brièvement — utile pour diagnostiquer un futur échec.
+        try:
+            hide_sensitive_info(sb)
+            sb.save_screenshot("click_immediate.png")
+        except Exception:
+            pass
 
         time.sleep(4)
         try:
