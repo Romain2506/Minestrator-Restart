@@ -1,1 +1,1 @@
-frozen=0;seconds_remaining=10570
+frozen=0;seconds_remaining=6960
